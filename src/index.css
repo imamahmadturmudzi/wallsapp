@@ -1,0 +1,16 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+body {
+  background-color: #F3F4F6;
+  font-family: 'Inter', sans-serif; /* Opsional, akan pakai font default sistem */
+  -webkit-tap-highlight-color: transparent; /* Hilangkan highlight biru saat tap di HP */
+}
+.scrollbar-hide::-webkit-scrollbar {
+    display: none;
+}
+.scrollbar-hide {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+}
