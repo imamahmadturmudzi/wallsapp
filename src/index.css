@@ -2,15 +2,21 @@
 @tailwind components;
 @tailwind utilities;
 
-body {
-  background-color: #F3F4F6;
-  font-family: 'Inter', sans-serif; /* Opsional, akan pakai font default sistem */
-  -webkit-tap-highlight-color: transparent; /* Hilangkan highlight biru saat tap di HP */
+@layer base {
+  body {
+    /* bg-gray-50 memberikan warna off-white yang sangat nyaman di mata */
+    @apply bg-gray-50 text-gray-800 antialiased selection:bg-teal-200 selection:text-teal-900;
+  }
 }
-.scrollbar-hide::-webkit-scrollbar {
-    display: none;
+
+/* Scrollbar yang lebih tipis dan elegan (opsional tapi sangat disarankan) */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
 }
-.scrollbar-hide {
-    -ms-overflow-style: none;
-    scrollbar-width: none;
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  @apply bg-gray-300 rounded-full hover:bg-gray-400 transition-colors;
 }

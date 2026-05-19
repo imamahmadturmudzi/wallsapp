@@ -1,6 +1,10 @@
 {
   "rewrites": [
     {
+      "source": "/assetlinks.json",
+      "destination": "/assetlinks.json"
+    },
+    {
       "source": "/(.*)",
       "destination": "/index.html"
     }

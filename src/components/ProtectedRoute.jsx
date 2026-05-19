@@ -22,5 +22,13 @@ const ProtectedRoute = ({ children }) => {
   // Jika tidak, tendang ke /login
   return user ? children : <Navigate to="/login" />;
 };
+// 2. SATPAM KHUSUS ORANG TUA (Cek Local Storage)
+const ProtectedParentRoute = ({ children }) => {
+  const isOrtuLoggedin = localStorage.getItem("isOrtuLoggedin");
+  if (isOrtuLoggedin !== "true") {
+    return <Navigate to="/login" />;
+  }
+  return children;
+};
 
 export default ProtectedRoute;

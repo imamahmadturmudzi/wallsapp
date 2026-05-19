@@ -1,0 +1,25 @@
+{
+  "short_name": "WalasApp",
+  "name": "WalasApp",
+  "description": "Sistem Informasi Manajemen Madrasah Terpadu",
+  "icons": [
+    {
+      "src": "logo192.png",
+      "type": "image/png",
+      "sizes": "192x192",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "logo512.png",
+      "type": "image/png",
+      "sizes": "512x512",
+      "purpose": "any"
+    }
+  ],
+  "start_url": "/",
+  "background_color": "#f9fafb",
+  "theme_color": "#0f172a",
+  "display": "standalone",
+  "id": "/?source=pwa",
+  "orientation": "portrait"
+}

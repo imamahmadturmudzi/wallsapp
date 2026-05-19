@@ -1,301 +1,355 @@
-import { useEffect, useState } from 'react';
-import { useParams, Link } from 'react-router-dom';
+import { useState, useEffect } from 'react';
 import { db } from '../firebase';
-import { doc, getDoc, collection, query, where, getDocs, orderBy } from 'firebase/firestore';
-import { User, BookOpen, ChevronLeft, Calendar, AlertTriangle, MessageCircle, Heart, Star, Briefcase, CheckCircle, Clock, XCircle, ExternalLink, Key } from 'lucide-react';
+import { collection, query, where, getDocs, getDoc, doc } from 'firebase/firestore';
+import { User, BookOpen, MessageCircle, Award, LogOut, Loader2, Signal, Printer } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
 
 const RaporSiswa = () => {
-  const { id } = useParams();
-  const [student, setStudent] = useState(null);
-  const [grades, setGrades] = useState(null);
-  const [tasks, setTasks] = useState([]);
-  const [logs, setLogs] = useState([]);
-  const [attendance, setAttendance] = useState([]);
-  const [attendanceStats, setAttendanceStats] = useState({ H:0, S:0, I:0, A:0 });
   const [loading, setLoading] = useState(true);
-  const [activeTab, setActiveTab] = useState('akademik');
-  const [tahfidz, setTahfidz] = useState([]); 
-  const [schoolInfo, setSchoolInfo] = useState({ schoolName: "", className: "" });
-  
-  // GANTI DENGAN NOMOR WA ANDA
-  const WALI_KELAS_PHONE = "6281234567890"; 
+  const [student, setStudent] = useState(null);
+  const [teacher, setTeacher] = useState(null);
+  const [schoolInfo, setSchoolInfo] = useState(null); // Data resmi untuk Kop Surat Rapor
+  const [nilaiData, setNilaiData] = useState(null);
+  const [tahfidz, setTahfidz] = useState([]);
+  const navigate = useNavigate();
 
   useEffect(() => {
-    const fetchData = async () => {
+    let isMounted = true; 
+
+    const fetchRapor = async () => {
+      const dataMentah = localStorage.getItem('ortu_studentData');
+      const studentId = dataMentah ? JSON.parse(dataMentah).id : null;
+
+      if (!studentId) {
+        if (isMounted) setLoading(false);
+        return; 
+      }
+
       try {
-        // 1. Ambil Profil Siswa & Info Sekolah Guru
-        const studentSnap = await getDoc(doc(db, "siswa", id));
-        if (studentSnap.exists()) {
-          const sData = studentSnap.data();
-          setStudent(sData);
+        // 1. Ambil Data Sekolah (Untuk Kop Rapor)
+        const schoolSnap = await getDoc(doc(db, "metadata", "school_info"));
+        if (schoolSnap.exists() && isMounted) setSchoolInfo(schoolSnap.data());
 
-          if (sData.teacherId) {
-             const teacherSnap = await getDoc(doc(db, "teachers", sData.teacherId));
-             if (teacherSnap.exists()) {
-                setSchoolInfo(teacherSnap.data());
-             }
+        // 2. Ambil Data Siswa
+        const siswaRef = doc(db, "siswa", studentId);
+        const siswaSnap = await getDoc(siswaRef);
+
+        if (siswaSnap.exists()) {
+          const dataSiswa = { id: siswaSnap.id, ...siswaSnap.data() };
+          if (!isMounted) return; 
+          setStudent(dataSiswa);
+
+          // 3. Ambil Data Wali Kelas
+          if (dataSiswa.teacherId) {
+            const teacherSnap = await getDoc(doc(db, "teachers", dataSiswa.teacherId));
+            if (teacherSnap.exists() && isMounted) setTeacher(teacherSnap.data());
           }
-          
-          // FETCH TUGAS (Hanya milik guru ini)
-          const qTugas = query(collection(db, "tugas"), where("teacherId", "==", sData.teacherId));
-          const tugasSnap = await getDocs(qTugas);
-          const sortedTasks = tugasSnap.docs.map(d => ({id:d.id, ...d.data()})).sort((a,b)=>new Date(a.dueDate)-new Date(b.dueDate));
-          setTasks(sortedTasks);
+
+          // 4. Ambil Nilai Akademik
+          const recordSnap = await getDoc(doc(db, "academic_records", dataSiswa.id));
+          if (recordSnap.exists() && isMounted) {
+            setNilaiData(recordSnap.data());
+          } else if (isMounted) {
+            setNilaiData({});
+          }
+
+          // 5. Ambil Tahfidz
+          const qTahfidz = query(collection(db, "tahfidz"), where("studentId", "==", dataSiswa.id));
+          const tahfidzSnap = await getDocs(qTahfidz);
+          const listTahfidz = tahfidzSnap.docs.map(d => d.data());
+          listTahfidz.sort((a, b) => (b.createdAt?.toMillis() || 0) - (a.createdAt?.toMillis() || 0));
+          if (isMounted) setTahfidz(listTahfidz);
         }
-
-        const nilaiSnap = await getDoc(doc(db, "nilai", id));
-        if (nilaiSnap.exists()) setGrades(nilaiSnap.data());
-
-        // Fetch Logs
-        const qJurnal = query(collection(db, "jurnal"), where("studentId", "==", id));
-        const logsSnap = await getDocs(qJurnal);
-        setLogs(logsSnap.docs.map(d => d.data()).sort((a,b) => new Date(b.createdAt) - new Date(a.createdAt)));
-
-        // Fetch Absen
-        const qAbsen = query(collection(db, "absensi"), where("studentId", "==", id));
-        const absenSnap = await getDocs(qAbsen);
-        let absenList = absenSnap.docs.map(d => d.data()).sort((a,b) => new Date(b.date) - new Date(a.date));
-        setAttendance(absenList);
-        
-        const stats = { H: 0, S: 0, I: 0, A: 0 };
-        absenList.forEach(a => { if (stats[a.status] !== undefined) stats[a.status]++; });
-        setAttendanceStats(stats);
-        
-        // Fetch Tahfidz
-        const qTahfidz = query(collection(db, "tahfidz"), where("studentId", "==", id));
-        const tahfidzSnap = await getDocs(qTahfidz);
-        const sortedTahfidz = tahfidzSnap.docs.map(d => d.data()).sort((a,b) => b.createdAt - a.createdAt);
-        setTahfidz(sortedTahfidz);
-
-      } catch (error) { console.error(error); }
-      setLoading(false);
+      } catch (error) {
+        console.error("Error memuat rapor:", error);
+      }
+      
+      if (isMounted) setLoading(false);
     };
-    fetchData();
-  }, [id]);
 
-  const handleLaporWA = () => {
-    if (!student) return;
-    const message = `Assalamualaikum, saya wali dari ${student.name} (Kode Login: ${student.loginCode})...`;
-    window.open(`https://wa.me/${WALI_KELAS_PHONE}?text=${encodeURIComponent(message)}`, '_blank');
+    fetchRapor();
+    return () => { isMounted = false; };
+  }, [navigate]);
+
+  const handleLogout = () => {
+    localStorage.removeItem('ortu_studentData');
+    localStorage.removeItem('isOrtuLoggedin');
+    window.location.href = '/login'; 
   };
 
-  if (loading) return <div className="min-h-screen flex items-center justify-center font-bold text-blue-600">Memuat Rapor...</div>;
-  if (!student) return <div className="p-10 text-center">Siswa tidak ditemukan.</div>;
+  const handleHubungiGuru = () => {
+    if (!teacher?.whatsapp) return alert("Wali kelas belum mengatur nomor WhatsApp.");
+    const wa = teacher.whatsapp.toString().replace(/\D/g, '').replace(/^0/, '62');
+    window.open(`https://wa.me/${wa}?text=Halo Pak/Bu ${teacher?.name || 'Guru'}, saya orang tua dari ${student?.name}.`, '_blank');
+  };
+
+  if (loading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-gray-50 print:hidden">
+        <Loader2 className="animate-spin text-teal-600" size={40} />
+      </div>
+    );
+  }
+
+  if (!student) {
+    return (
+      <div className="min-h-screen flex flex-col items-center justify-center p-6 text-center bg-gray-50 print:hidden">
+        <p className="text-gray-500 mb-6">Sesi Anda telah habis atau data tidak ditemukan.</p>
+        <button onClick={() => navigate('/login')} className="bg-gray-800 text-white px-6 py-2.5 rounded-xl font-bold">
+          Kembali ke Halaman Login
+        </button>
+      </div>
+    );
+  }
 
   return (
-    <div className="min-h-screen bg-gray-50 pb-24 relative">
-      
-      {/* Header */}
-      <div className="bg-blue-600 text-white p-6 rounded-b-3xl shadow-lg relative overflow-hidden">
-        <div className="absolute top-0 right-0 p-4 opacity-10"><BookOpen size={100} /></div>
+    <>
+      {/* ========================================================
+        STYLE KHUSUS KERTAS A4 SAAT DICETAK (CSS PRINT MEDIA) 
+        ========================================================
+      */}
+      <style>
+        {`
+          @media print {
+            @page { size: A4 portrait; margin: 1.5cm; }
+            body { -webkit-print-color-adjust: exact; print-color-adjust: exact; background-color: white !important; }
+            .print\\:hidden { display: none !important; }
+            .print\\:block { display: block !important; }
+          }
+        `}
+      </style>
+
+      {/* ========================================================
+        WAJAH 1: TAMPILAN LAYAR (UI V2.0 MINIMALIS UNTUK HP/PC)
+        ========================================================
+      */}
+      <div className="min-h-screen bg-gray-50 pb-20 font-sans print:hidden">
         
-        <Link to="/login" className="inline-flex items-center gap-2 text-blue-100 mb-4 hover:text-white transition-colors relative z-10">
-          <ChevronLeft size={20} /> Keluar
-        </Link>
-        
-        <div className="flex items-center gap-4 relative z-10 mt-4">
-          <div className="w-16 h-16 bg-white/20 rounded-full flex items-center justify-center text-2xl font-bold backdrop-blur-sm shadow-inner border border-white/30">
-            {student.name ? student.name.charAt(0) : "?"}
-          </div>
-          <div>
-            <h1 className="text-xl font-bold">{student.name}</h1>
-            
-            {/* --- UPDATE DISINI: TAMPILKAN LOGIN CODE BUKAN NIS --- */}
-            <div className="flex items-center gap-2 mt-1 mb-2">
-               <span className="text-blue-100 opacity-90 font-mono text-sm flex items-center gap-1">
-                 <Key size={12}/> Kode Login: 
-               </span>
-               <span className="bg-white/20 px-2 py-0.5 rounded text-sm font-bold font-mono tracking-widest">
-                 {student.loginCode || student.nis || "-"}
-               </span>
-            </div>
-            {/* ----------------------------------------------------- */}
-
-            <div className="inline-flex gap-2 text-[10px] bg-blue-700/50 px-2 py-1 rounded-lg border border-blue-500/30">
-               <span>🏫 {schoolInfo.schoolName || "Sekolah"}</span>
-               <span>•</span>
-               <span>{schoolInfo.className || "Kelas"}</span>
-            </div>
-          </div>
-        </div>
-
-        {/* Tab Switcher */}
-        <div className="flex gap-2 mt-6 relative z-10">
-          <button onClick={() => setActiveTab('akademik')} className={`flex-1 py-2 rounded-xl text-sm font-bold transition-all ${activeTab === 'akademik' ? 'bg-white text-blue-600 shadow-md' : 'bg-blue-700/50 text-blue-100 hover:bg-blue-700'}`}>Laporan Belajar</button>
-          <button onClick={() => setActiveTab('profil')} className={`flex-1 py-2 rounded-xl text-sm font-bold transition-all ${activeTab === 'profil' ? 'bg-white text-blue-600 shadow-md' : 'bg-blue-700/50 text-blue-100 hover:bg-blue-700'}`}>Biodata</button>
-        </div>
-      </div>
-
-      <div className="p-4 max-w-2xl mx-auto space-y-6 -mt-2 relative z-0">
-        
-        {/* === TAB LAPORAN BELAJAR === */}
-        {activeTab === 'akademik' && (
-          <div className="space-y-6 animate-fade-in">
-            
-            {/* 1. MONITORING TUGAS & PR */}
-            <div className="bg-white p-5 rounded-2xl shadow-sm border border-blue-100">
-              <h2 className="font-bold text-gray-800 flex items-center gap-2 mb-4">
-                <BookOpen className="text-blue-600" size={20} /> Monitoring Tugas & PR
-              </h2>
-
-              {tasks.length === 0 ? (
-                <div className="bg-gray-50 text-gray-500 p-4 rounded-xl text-sm text-center">
-                  Belum ada tugas yang diberikan.
-                </div>
-              ) : (
-                <div className="space-y-3">
-                  {tasks.map((task) => {
-                    const isDone = task.completedBy?.includes(student?.id || ""); 
-                    const due = new Date(task.dueDate);
-                    const today = new Date(); today.setHours(0,0,0,0);
-                    const diffTime = due - today;
-                    const daysLeft = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
-
-                    return (
-                      <div key={task.id} className={`p-3 rounded-xl border-l-4 shadow-sm bg-white
-                        ${isDone ? 'border-green-500' : daysLeft < 0 ? 'border-red-500' : 'border-orange-500'}`}>
-                        
-                        <div className="flex justify-between items-start">
-                           <span className="text-[10px] font-bold px-2 py-0.5 rounded uppercase bg-blue-50 text-blue-700">
-                             {task.subject}
-                           </span>
-                           {isDone ? (
-                             <span className="flex items-center gap-1 text-xs font-bold text-green-600 bg-green-50 px-2 py-1 rounded-full"><CheckCircle size={12}/> SELESAI</span>
-                           ) : (
-                             <span className="flex items-center gap-1 text-xs font-bold text-red-500 bg-red-50 px-2 py-1 rounded-full"><XCircle size={12}/> BELUM</span>
-                           )}
-                        </div>
-
-                        <h3 className="font-bold text-gray-800 text-sm mt-1">{task.title}</h3>
-                        <p className="text-xs text-gray-500 mt-1 line-clamp-2">{task.description || "-"}</p>
-                        
-                        {task.link && (
-                           <a href={task.link} target="_blank" rel="noreferrer" 
-                              className="mt-2 inline-flex items-center gap-1 text-xs font-bold text-blue-600 bg-blue-50 px-3 py-1.5 rounded-lg border border-blue-100 hover:bg-blue-100 transition-colors">
-                              <ExternalLink size={12} /> Buka Lampiran Soal
-                           </a>
-                        )}
-
-                        {!isDone && (
-                           <div className="mt-2 pt-2 border-t border-gray-100 flex items-center gap-1 text-[10px] text-gray-400">
-                              <Clock size={10} /> Deadline: {task.dueDate.split('-').reverse().join('/')} 
-                              <span className={`ml-1 font-bold ${daysLeft < 0 ? 'text-red-500' : 'text-orange-500'}`}>
-                                ({daysLeft < 0 ? "Terlewat" : daysLeft === 0 ? "Hari Ini" : `${daysLeft} hari lagi`})
-                              </span>
-                           </div>
-                        )}
-                      </div>
-                    )
-                  })}
-                </div>
-              )}
-            </div>
-
-            {/* 2. NILAI SIKAP */}
-            <div className="bg-white p-5 rounded-2xl shadow-sm border border-gray-100">
-               <h2 className="font-bold text-gray-800 flex items-center gap-2 mb-4"><Heart className="text-orange-500" size={20}/> Sikap & Karakter</h2>
-               <div className="grid grid-cols-2 gap-4 mb-3">
-                  <div className="bg-orange-50 p-3 rounded-xl border border-orange-100 text-center">
-                    <span className="text-xs text-orange-600 font-bold uppercase block mb-1">Spiritual</span>
-                    <span className="text-lg font-bold text-gray-800">{grades?.sikap?.spiritual || "-"}</span>
-                  </div>
-                  <div className="bg-orange-50 p-3 rounded-xl border border-orange-100 text-center">
-                    <span className="text-xs text-orange-600 font-bold uppercase block mb-1">Sosial</span>
-                    <span className="text-lg font-bold text-gray-800">{grades?.sikap?.sosial || "-"}</span>
-                  </div>
-               </div>
-               {grades?.sikap?.catatan && (
-                 <div className="bg-gray-50 p-3 rounded-xl text-sm text-gray-600 italic border border-gray-100">" {grades.sikap.catatan} "</div>
-               )}
-            </div>
-
-            {/* 3. TAHFIDZ */}
-            <div className="bg-white p-5 rounded-2xl shadow-sm border border-green-100">
-              <h2 className="font-bold text-gray-800 flex items-center gap-2 mb-4">
-                <BookOpen className="text-green-600" size={20} /> Laporan Tahfidz
-              </h2>
-              {tahfidz.length === 0 ? (
-                <p className="text-gray-400 italic text-center text-sm">Belum ada data hafalan.</p>
-              ) : (
-                <div className="space-y-4">
-                   {tahfidz.find(t => t.status !== 'Khatam') && (
-                     <div className="bg-blue-50 p-3 rounded-xl border border-blue-100">
-                        <p className="text-xs text-blue-600 font-bold uppercase mb-1">Sedang Dihafal</p>
-                        <div className="flex justify-between items-center">
-                           <span className="font-bold text-blue-900">{tahfidz.find(t => t.status !== 'Khatam').surah}</span>
-                           <span className="text-sm bg-white px-2 py-1 rounded text-blue-700 font-mono">
-                             Ayat {tahfidz.find(t => t.status !== 'Khatam').ayatStart}-{tahfidz.find(t => t.status !== 'Khatam').ayatEnd}
-                           </span>
-                        </div>
-                     </div>
-                   )}
-                   <div>
-                      <p className="text-xs text-gray-400 font-bold uppercase mb-2">Hafalan Tuntas (Khatam)</p>
-                      <div className="flex flex-wrap gap-2">
-                        {tahfidz.filter(t => t.status === 'Khatam').map((t, idx) => (
-                           <span key={idx} className="bg-green-100 text-green-800 text-xs font-bold px-3 py-1 rounded-full flex items-center gap-1 border border-green-200">
-                              <CheckCircle size={10} /> {t.surah}
-                           </span>
-                        ))}
-                      </div>
-                   </div>
-                </div>
-              )}
-            </div>
-
-            {/* 4. EKSKUL */}
-            <div className="bg-white p-5 rounded-2xl shadow-sm border border-gray-100">
-              <h2 className="font-bold text-gray-800 flex items-center gap-2 mb-4"><Star className="text-purple-600" size={20}/> Pengembangan Diri</h2>
-              <div className="space-y-3">
-                 {[1, 2, 3].map(num => {
-                    const nama = student[`ekskul${num}`];
-                    const nilai = grades?.ekskul?.[`predikat${num}`];
-                    if(!nama) return null;
-                    return (
-                       <div key={num} className="flex justify-between items-center p-3 bg-purple-50 rounded-xl border border-purple-100">
-                          <span className="font-bold text-purple-900">{nama}</span>
-                          <span className="text-xs font-bold bg-white text-purple-700 px-3 py-1 rounded-full border border-purple-200">{nilai ? `Predikat: ${nilai}` : "Belum dinilai"}</span>
-                       </div>
-                    )
-                 })}
-                 {!student.ekskul1 && <p className="text-gray-400 italic text-center text-sm">Tidak mengikuti kegiatan ekskul.</p>}
-              </div>
-            </div>
-
-            {/* 5. ABSENSI */}
-            <div className="bg-white p-5 rounded-2xl shadow-sm border border-gray-100">
-              <h2 className="font-bold text-gray-800 flex items-center gap-2 mb-4"><Calendar className="text-green-600" size={20}/> Kehadiran</h2>
-              <div className="grid grid-cols-4 gap-2 text-center text-sm mb-2">
-                 <div className="bg-green-50 p-2 rounded-lg font-bold text-green-700">{attendanceStats.H}<br/><span className="text-[10px] uppercase font-normal">Hadir</span></div>
-                 <div className="bg-blue-50 p-2 rounded-lg font-bold text-blue-700">{attendanceStats.S}<br/><span className="text-[10px] uppercase font-normal">Sakit</span></div>
-                 <div className="bg-orange-50 p-2 rounded-lg font-bold text-orange-700">{attendanceStats.I}<br/><span className="text-[10px] uppercase font-normal">Izin</span></div>
-                 <div className="bg-red-50 p-2 rounded-lg font-bold text-red-700">{attendanceStats.A}<br/><span className="text-[10px] uppercase font-normal">Alpha</span></div>
-              </div>
-            </div>
-
-          </div>
-        )}
-
-        {/* === TAB BIODATA === */}
-        {activeTab === 'profil' && (
-           <div className="space-y-4 animate-fade-in">
-              <div className="bg-white p-5 rounded-2xl shadow-sm border border-gray-100">
-                 <h2 className="font-bold text-gray-800 border-b pb-2 mb-3">Data Pribadi</h2>
-                 <p className="flex justify-between text-sm py-1"><span className="text-gray-500">TTL</span> <span>{student.birthPlace}, {student.birthDate}</span></p>
-                 <p className="flex justify-between text-sm py-1"><span className="text-gray-500">Agama</span> <span>{student.religion}</span></p>
-              </div>
-              <div className="bg-white p-5 rounded-2xl shadow-sm border border-gray-100">
-                 <h2 className="font-bold text-gray-800 border-b pb-2 mb-3">Orang Tua</h2>
-                 <p className="flex justify-between text-sm py-1"><span className="text-gray-500">Ayah</span> <span>{student.fatherName}</span></p>
-                 <p className="flex justify-between text-sm py-1"><span className="text-gray-500">Ibu</span> <span>{student.motherName}</span></p>
-                 <p className="flex justify-between text-sm py-1"><span className="text-gray-500">HP</span> <span>{student.parentPhone}</span></p>
-              </div>
+        {/* Header Flat */}
+        <div className="bg-white border-b border-gray-200 px-5 py-4 flex justify-between items-center sticky top-0 z-50">
+           <div className="flex items-center gap-2">
+             <Signal size={18} className="text-teal-600" />
+             <h1 className="text-base font-bold text-gray-800 tracking-tight">Portal Akademik</h1>
            </div>
-        )}
+           <div className="flex gap-2">
+             <button onClick={handleLogout} className="p-2 bg-red-50 text-red-600 hover:bg-red-100 rounded-lg transition-colors">
+               <LogOut size={18}/>
+             </button>
+           </div>
+        </div>
+
+        <div className="max-w-3xl mx-auto p-4 space-y-4">
+          
+          {/* Kartu Profil Siswa */}
+          <div className="bg-white p-5 rounded-2xl border border-gray-200 flex flex-col sm:flex-row justify-between gap-4 items-center">
+            <div className="flex items-center gap-4 text-left w-full">
+              <div className="w-14 h-14 bg-teal-50 rounded-xl flex items-center justify-center text-teal-600 border border-teal-100 shrink-0">
+                <User size={28} />
+              </div>
+              <div>
+                <h2 className="text-lg font-bold text-gray-800">{student?.name}</h2>
+                <div className="flex items-center gap-2 mt-1">
+                  <span className="text-xs text-gray-500 font-medium">Kelas {teacher?.className || "-"}</span>
+                  <span className="text-gray-300">•</span>
+                  <span className="text-xs text-gray-500 font-medium">NISN: {student?.nisn || "-"}</span>
+                </div>
+              </div>
+            </div>
+            <button onClick={handleHubungiGuru} className="w-full sm:w-auto bg-white border border-gray-200 text-gray-700 hover:bg-gray-50 px-4 py-2.5 rounded-xl text-xs font-bold flex items-center justify-center gap-2 shrink-0 transition-colors">
+              <MessageCircle size={16} /> Hubungi Wali Kelas
+            </button>
+          </div>
+
+          {/* Nilai Akademik */}
+          <div className="bg-white p-5 rounded-2xl border border-gray-200">
+            <h3 className="text-sm font-bold text-gray-800 flex items-center gap-2 mb-4">
+              <BookOpen size={18} className="text-gray-400" /> Nilai Akademik
+            </h3>
+            {!nilaiData?.akademik || Object.keys(nilaiData.akademik).length === 0 ? (
+              <div className="py-8 text-center text-gray-400 text-sm">Belum ada nilai akademik.</div>
+            ) : (
+              <div className="space-y-3">
+                {Object.keys(nilaiData.akademik).map((mapel) => (
+                  <div key={mapel} className="border border-gray-100 rounded-xl overflow-hidden">
+                    <div className="bg-gray-50 px-4 py-2.5 font-bold text-gray-700 text-xs border-b border-gray-100">{mapel}</div>
+                    <div className="p-3 grid grid-cols-4 gap-2 bg-white">
+                      {['UH1', 'UH2', 'PTS', 'PAS'].map((kat) => (
+                        <div key={kat} className="text-center p-2 rounded-lg border border-gray-50">
+                          <p className="text-[10px] text-gray-400 font-bold mb-1">{kat}</p>
+                          <p className="text-base font-bold text-gray-800">{nilaiData.akademik[mapel][kat]?.angka || "-"}</p>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* Sikap & Ekskul */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div className="bg-white p-5 rounded-2xl border border-gray-200">
+              <h3 className="text-xs font-bold text-gray-500 uppercase mb-3">Sikap & Karakter</h3>
+              <div className="space-y-2">
+                <div className="flex justify-between items-center p-3 bg-gray-50 rounded-xl border border-gray-100">
+                   <span className="text-xs text-gray-600 font-medium">Spiritual</span>
+                   <span className="font-bold text-gray-800">{nilaiData?.non_akademik?.sikapSpiritual || "-"}</span>
+                </div>
+                <div className="flex justify-between items-center p-3 bg-gray-50 rounded-xl border border-gray-100">
+                   <span className="text-xs text-gray-600 font-medium">Sosial</span>
+                   <span className="font-bold text-gray-800">{nilaiData?.non_akademik?.sikapSosial || "-"}</span>
+                </div>
+              </div>
+            </div>
+            
+            <div className="bg-white p-5 rounded-2xl border border-gray-200">
+              <h3 className="text-xs font-bold text-gray-500 uppercase mb-3">Ekstrakurikuler</h3>
+              <div className="p-4 bg-gray-50 rounded-xl border border-gray-100 text-center">
+                 <p className="font-bold text-gray-800 text-sm mb-1">{nilaiData?.non_akademik?.ekskulTerpilih || "Belum Terdaftar"}</p>
+                 <span className="text-xs text-gray-500">Predikat: <strong className="text-teal-600">{nilaiData?.non_akademik?.nilaiEkskul || "-"}</strong></span>
+              </div>
+            </div>
+          </div>
+        </div>
       </div>
 
-      <button onClick={handleLaporWA} className="fixed bottom-6 right-6 bg-green-500 text-white p-4 rounded-full shadow-xl flex items-center gap-2 z-50 hover:bg-green-600 transition-all active:scale-95"><MessageCircle size={24}/><span className="font-bold text-sm hidden md:inline">Hubungi Guru</span></button>
-    </div>
+      {/* ========================================================
+        WAJAH 2: TAMPILAN KERTAS A4 SAAT DICETAK (PRINT ONLY)
+        ========================================================
+      */}
+      <div className="hidden print:block bg-white text-black w-full text-sm font-serif pb-10">
+        
+        {/* KOP SURAT */}
+        <div className="flex items-center justify-center border-b-[3px] border-black pb-4 mb-6">
+          {schoolInfo?.logoUrl && (
+            <img src={schoolInfo.logoUrl} alt="Logo" className="w-24 h-24 object-contain mr-6" />
+          )}
+          <div className="text-center">
+            <h1 className="text-2xl font-bold uppercase tracking-wide">{schoolInfo?.namaSekolah || "NAMA SEKOLAH BELUM DIATUR"}</h1>
+            <p className="text-sm mt-1">Sistem Informasi Manajemen Sekolah Terpadu</p>
+            <p className="text-xs italic mt-0.5">Dicetak melalui sistem WalasApp pada {new Date().toLocaleDateString('id-ID')}</p>
+          </div>
+        </div>
+
+        <h2 className="text-center font-bold text-lg mb-6 uppercase underline">Laporan Hasil Belajar Peserta Didik</h2>
+
+        {/* BIODATA */}
+        <div className="flex justify-between mb-6 text-sm">
+          <table className="w-1/2">
+            <tbody>
+              <tr><td className="py-1 w-32">Nama Peserta Didik</td><td className="py-1 w-4">:</td><td className="py-1 font-bold">{student?.name}</td></tr>
+              <tr><td className="py-1">NISN / NIS</td><td className="py-1">:</td><td className="py-1">{student?.nisn || "-"}</td></tr>
+            </tbody>
+          </table>
+          <table className="w-1/2">
+            <tbody>
+              <tr><td className="py-1 w-24">Kelas</td><td className="py-1 w-4">:</td><td className="py-1 font-bold">{teacher?.className || "-"}</td></tr>
+              <tr><td className="py-1">Fase / Semester</td><td className="py-1">:</td><td className="py-1">D / {schoolInfo?.semester || "Genap"}</td></tr>
+              <tr><td className="py-1">Tahun Ajaran</td><td className="py-1">:</td><td className="py-1">{schoolInfo?.tahunAjaran || "2025/2026"}</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        {/* TABEL NILAI AKADEMIK */}
+        <h3 className="font-bold mb-2">A. Nilai Akademik</h3>
+        <table className="w-full border-collapse border border-black text-sm mb-6">
+          <thead>
+            <tr className="bg-gray-100">
+              <th className="border border-black p-2 w-10 text-center">No</th>
+              <th className="border border-black p-2 text-left">Mata Pelajaran</th>
+              <th className="border border-black p-2 w-20 text-center">Rata-rata</th>
+              <th className="border border-black p-2 w-20 text-center">Predikat</th>
+            </tr>
+          </thead>
+          <tbody>
+            {!nilaiData?.akademik || Object.keys(nilaiData.akademik).length === 0 ? (
+              <tr><td colSpan="4" className="border border-black p-4 text-center italic">Data nilai belum tersedia.</td></tr>
+            ) : (
+              Object.keys(nilaiData.akademik).map((mapel, idx) => {
+                // Hitung Rata-rata sederhana (PAS sebagai acuan utama, atau rata-rata semua)
+                const uh1 = Number(nilaiData.akademik[mapel]?.UH1?.angka || 0);
+                const uh2 = Number(nilaiData.akademik[mapel]?.UH2?.angka || 0);
+                const pts = Number(nilaiData.akademik[mapel]?.PTS?.angka || 0);
+                const pas = Number(nilaiData.akademik[mapel]?.PAS?.angka || 0);
+                
+                // Logika rata-rata simpel: jika ada PAS, pakai PAS, jika tidak, rata-rata yang ada
+                const divisor = (uh1?1:0) + (uh2?1:0) + (pts?1:0) + (pas?1:0) || 1;
+                const avg = Math.round((uh1 + uh2 + pts + pas) / divisor);
+                
+                let predikat = "D";
+                if(avg >= 90) predikat = "A";
+                else if(avg >= 80) predikat = "B";
+                else if(avg >= 70) predikat = "C";
+
+                return (
+                  <tr key={mapel}>
+                    <td className="border border-black p-2 text-center">{idx + 1}</td>
+                    <td className="border border-black p-2">{mapel}</td>
+                    <td className="border border-black p-2 text-center font-bold">{avg > 0 ? avg : "-"}</td>
+                    <td className="border border-black p-2 text-center font-bold">{avg > 0 ? predikat : "-"}</td>
+                  </tr>
+                )
+              })
+            )}
+          </tbody>
+        </table>
+
+        {/* TABEL NON AKADEMIK */}
+        <h3 className="font-bold mb-2">B. Pengembangan Diri & Sikap</h3>
+        <table className="w-full border-collapse border border-black text-sm mb-12">
+          <thead>
+            <tr className="bg-gray-100">
+              <th className="border border-black p-2 text-left">Aspek Penilaian</th>
+              <th className="border border-black p-2 text-left">Keterangan / Predikat</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td className="border border-black p-2">Sikap Spiritual</td>
+              <td className="border border-black p-2">{nilaiData?.non_akademik?.sikapSpiritual || "-"}</td>
+            </tr>
+            <tr>
+              <td className="border border-black p-2">Sikap Sosial</td>
+              <td className="border border-black p-2">{nilaiData?.non_akademik?.sikapSosial || "-"}</td>
+            </tr>
+            <tr>
+              <td className="border border-black p-2">Ekstrakurikuler ({nilaiData?.non_akademik?.ekskulTerpilih || "-"})</td>
+              <td className="border border-black p-2">{nilaiData?.non_akademik?.nilaiEkskul || "-"}</td>
+            </tr>
+          </tbody>
+        </table>
+
+        {/* TANDA TANGAN */}
+        <div className="flex justify-between text-sm mt-10 text-center">
+           <div className="w-1/3">
+             <p>Mengetahui,</p>
+             <p>Orang Tua/Wali</p>
+             <div className="h-20"></div>
+             <p className="font-bold underline">( ...................................... )</p>
+           </div>
+           
+           <div className="w-1/3">
+             <p>Kuningan, {new Date().toLocaleDateString('id-ID', { day: 'numeric', month: 'long', year: 'numeric' })}</p>
+             <p>Wali Kelas</p>
+             <div className="h-20"></div>
+             <p className="font-bold underline">{teacher?.name || "Nama Guru"}</p>
+             {teacher?.nip && <p>NIP. {teacher.nip}</p>}
+           </div>
+        </div>
+        
+        {/* KEPALA SEKOLAH */}
+        <div className="flex justify-center text-sm mt-8 text-center">
+           <div className="w-1/2">
+             <p>Mengetahui,</p>
+             <p>Kepala Sekolah</p>
+             <div className="h-20"></div>
+             <p className="font-bold underline">{schoolInfo?.kepalaSekolah || "Nama Kepala Sekolah"}</p>
+             <p>NIP. {schoolInfo?.nipKepalaSekolah || "-"}</p>
+           </div>
+        </div>
+
+      </div>
+    </>
   );
 };
 

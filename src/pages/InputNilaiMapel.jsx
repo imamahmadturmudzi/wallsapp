@@ -1,241 +1,462 @@
 import { useState, useEffect } from 'react';
 import { db, auth } from '../firebase';
-import { collection, query, where, getDocs, addDoc, getDoc, doc } from 'firebase/firestore';
-import { Send, Users, BookOpen, CheckCircle, School } from 'lucide-react';
+import { collection, getDocs, doc, updateDoc, query, where, getDoc, setDoc } from 'firebase/firestore';
+import { BookOpen, Users, Save, ChevronRight, AlertCircle, School, Plus, Trash2, SlidersHorizontal, Calculator, TextQuote } from 'lucide-react';
 
 const InputNilaiMapel = () => {
-  const [sekolahAktif, setSekolahAktif] = useState('');
-  const [daftarKelas, setDaftarKelas] = useState([]);
-  const [selectedWaliId, setSelectedWaliId] = useState('');
+  const [loading, setLoading] = useState(true);
+  const [classesTaught, setClassesTaught] = useState([]);
+  const [selectedClass, setSelectedClass] = useState(null);
   const [students, setStudents] = useState([]);
-  const [selectedMapel, setSelectedMapel] = useState('');
-  const [scores, setScores] = useState({});
-  const [isLoadingData, setIsLoadingData] = useState(true);
-  const [isSending, setIsSending] = useState(false);
+  const [grades, setGrades] = useState({}); 
+  const [isSaving, setIsSaving] = useState(false);
 
-  // 1. DETEKSI OTOMATIS JARINGAN SEKOLAH SAAT HALAMAN DIBUKA
+  // === PENGATURAN PENILAIAN ===
+  const [kkm, setKkm] = useState(75);
+  const [phCount, setPhCount] = useState(1);
+  const [phDescriptions, setPhDescriptions] = useState(['']); 
+  const [weights, setWeights] = useState({ PH: 50, UTS: 25, UAS: 25 });
+  const [showSettings, setShowSettings] = useState(false);
+
   useEffect(() => {
-    const initSchoolNetwork = async () => {
-      setIsLoadingData(true);
+    const fetchMyClasses = async () => {
+      const user = auth.currentUser;
+      if (!user) return;
       try {
-        const user = auth.currentUser;
-        if (!user) return;
+        const jadwalSnap = await getDocs(collection(db, "jadwal"));
+        const myClassesMap = new Map(); 
 
-        // a. Cek profil guru yang sedang login
-        const userRef = doc(db, "teachers", user.uid);
-        const userSnap = await getDoc(userRef);
-        
-        if (userSnap.exists()) {
-          const schoolCode = userSnap.data().schoolName || '';
-          setSekolahAktif(schoolCode);
-
-          if (schoolCode) {
-            // b. Cari semua kelas (Wali Kelas) yang ada di sekolah yang sama
-            const q = query(collection(db, "teachers"), where("schoolName", "==", schoolCode));
-            const guruSnap = await getDocs(q);
-            
-            const kelasDitemukan = [];
-            guruSnap.forEach((d) => {
-              const dataGuru = d.data();
-              // Hanya ambil guru yang memiliki nama kelas (bertindak sebagai Wali Kelas)
-              if (dataGuru.className) {
-                kelasDitemukan.push({
-                  idWali: d.id,
-                  namaKelas: dataGuru.className,
-                  namaWali: dataGuru.name
-                });
+        jadwalSnap.forEach(doc => {
+          const dataKelas = doc.data();
+          const jadwalMingguan = dataKelas.jadwal || {};
+          
+          Object.values(jadwalMingguan).forEach(hariArr => {
+            hariArr.forEach(slot => {
+              if (slot.guruId === user.uid) {
+                const uniqueKey = `${dataKelas.classId}_${slot.mapel}`;
+                if (!myClassesMap.has(uniqueKey)) {
+                  myClassesMap.set(uniqueKey, { classId: dataKelas.classId, className: dataKelas.className, mapel: slot.mapel });
+                }
               }
             });
+          });
+        });
 
-            // Urutkan kelas berdasarkan abjad (misal 7A, 7B)
-            kelasDitemukan.sort((a, b) => a.namaKelas.localeCompare(b.namaKelas));
-            setDaftarKelas(kelasDitemukan);
-          }
-        }
-      } catch (error) {
-        console.error("Gagal memuat jaringan sekolah:", error);
-      }
-      setIsLoadingData(false);
+        const classArray = Array.from(myClassesMap.values());
+        setClassesTaught(classArray.sort((a, b) => a.className.localeCompare(b.className)));
+      } catch (error) { console.error(error); }
+      setLoading(false);
     };
-
-    initSchoolNetwork();
+    fetchMyClasses();
   }, []);
 
-  // 2. FUNGSI SAAT KELAS DIPILIH DARI DROPDOWN
-  const handlePilihKelas = async (idWali) => {
-    setSelectedWaliId(idWali);
-    setStudents([]);
-    setScores({});
-    
-    if (!idWali) return;
-
+  const handleSelectClass = async (cls) => {
+    setSelectedClass(cls);
+    setLoading(true);
     try {
-      // Ambil daftar siswa yang bernaung di bawah Wali Kelas tersebut
-      const q = query(collection(db, "siswa"), where("teacherId", "==", idWali));
-      const snap = await getDocs(q);
-      const listSiswa = snap.docs.map(d => ({ id: d.id, ...d.data() }));
-      
-      // Urutkan nama siswa sesuai abjad
-      setStudents(listSiswa.sort((a, b) => a.name.localeCompare(b.name)));
-    } catch (e) {
-      alert("Gagal mengambil data siswa di kelas ini.");
-    }
-  };
+      const classDoc = await getDoc(doc(db, "teachers", cls.classId));
+      if (classDoc.exists() && classDoc.data().kkm) setKkm(Number(classDoc.data().kkm));
+      else setKkm(75);
 
-  // 3. FUNGSI UPDATE NILAI LOKAL DI TABEL
-  const handleScoreChange = (studentId, category, value) => {
-    setScores(prev => ({
-      ...prev,
-      [studentId]: {
-        ...prev[studentId],
-        [category]: value
+      const settingRef = doc(db, "mapel_settings", `${cls.classId}_${cls.mapel}`);
+      const settingSnap = await getDoc(settingRef);
+      let maxPhLength = 1;
+
+      if (settingSnap.exists()) {
+         const data = settingSnap.data();
+         setWeights(data.weights || { PH: 50, UTS: 25, UAS: 25 });
+         setPhCount(data.phCount || 1);
+         setPhDescriptions(data.phDescriptions || ['']);
+         maxPhLength = data.phCount || 1;
+      } else {
+         setWeights({ PH: 50, UTS: 25, UAS: 25 });
+         setPhCount(1);
+         setPhDescriptions(['']);
       }
-    }));
-  };
 
-  // 4. FUNGSI KIRIM KE RUANG KARANTINA
-  const handleSubmitToWaliKelas = async () => {
-    if (!selectedMapel.trim()) return alert("Mohon isi Nama Mata Pelajaran terlebih dahulu!");
-    if (Object.keys(scores).length === 0) return alert("Belum ada nilai yang diisi!");
+      const qSiswa = query(collection(db, "siswa"), where("teacherId", "==", cls.classId));
+      const snapSiswa = await getDocs(qSiswa);
+      const studentList = [];
+      const currentGrades = {};
 
-    setIsSending(true);
-    try {
-      const user = auth.currentUser;
-      const userName = user.displayName || "Guru Mapel";
-
-      // Payload untuk "Ruang Tunggu" / Staging Area
-      await addDoc(collection(db, "draft_nilai"), {
-        senderId: user.uid,
-        senderName: userName,
-        receiverId: selectedWaliId,
-        mapel: selectedMapel.trim(),
-        dataNilai: scores,
-        status: "pending", // Menunggu disetujui wali kelas
-        timestamp: new Date().getTime(),
-        createdAt: new Date().toLocaleString("id-ID")
+      snapSiswa.forEach(doc => {
+        const data = doc.data();
+        studentList.push({ id: doc.id, ...data });
+        
+        if (data.nilaiMapel && data.nilaiMapel[cls.mapel] && typeof data.nilaiMapel[cls.mapel] === 'object') {
+           const objNilai = data.nilaiMapel[cls.mapel];
+           currentGrades[doc.id] = { PH: objNilai.PH || Array(maxPhLength).fill(''), UTS: objNilai.UTS || '', UAS: objNilai.UAS || '' };
+           if (objNilai.PH && objNilai.PH.length > maxPhLength) {
+              maxPhLength = objNilai.PH.length;
+              setPhCount(maxPhLength);
+           }
+        } else {
+           currentGrades[doc.id] = { PH: Array(maxPhLength).fill(''), UTS: '', UAS: '' };
+        }
       });
 
-      alert("Laporan Nilai berhasil dikirim ke Wali Kelas!");
-      // Reset form setelah sukses
-      setScores({});
-      setSelectedMapel('');
-      setSelectedWaliId('');
-      setStudents([]);
-    } catch (e) {
-      alert("Terjadi kesalahan saat mengirim nilai.");
-    }
-    setIsSending(false);
+      setStudents(studentList.sort((a, b) => a.name.localeCompare(b.name)));
+      
+      Object.keys(currentGrades).forEach(key => {
+         while (currentGrades[key].PH.length < maxPhLength) currentGrades[key].PH.push('');
+      });
+      setGrades(currentGrades);
+      
+      setPhDescriptions(prev => {
+        const newDesc = [...prev];
+        while (newDesc.length < maxPhLength) newDesc.push('');
+        return newDesc;
+      });
+
+    } catch (error) { console.error(error); }
+    setLoading(false);
   };
 
-  if (isLoadingData) {
-    return <div className="p-8 text-center text-gray-500 font-bold animate-pulse">Menghubungkan ke Jaringan Sekolah...</div>;
-  }
+  const handleGradeChange = (studentId, type, value, phIndex = 0) => {
+    setGrades(prev => {
+      const studentData = { ...prev[studentId] };
+      if (type === 'PH') {
+        const newPhArr = [...studentData.PH];
+        newPhArr[phIndex] = value;
+        studentData.PH = newPhArr;
+      } else studentData[type] = value;
+      return { ...prev, [studentId]: studentData };
+    });
+  };
+
+  const hitungNilaiAkhir = (studentId) => {
+    const data = grades[studentId];
+    if (!data) return 0;
+    const validPh = data.PH.map(Number).filter(n => !isNaN(n) && n > 0);
+    const avgPh = validPh.length > 0 ? validPh.reduce((a,b)=>a+b, 0) / validPh.length : 0;
+    const uts = Number(data.UTS) || 0;
+    const uas = Number(data.UAS) || 0;
+    const wPh = Number(weights.PH) || 0;
+    const wUts = Number(weights.UTS) || 0;
+    const wUas = Number(weights.UAS) || 0;
+    const totalWeight = wPh + wUts + wUas;
+    if (totalWeight === 0) return 0;
+    return Math.round(((avgPh * wPh) + (uts * wUts) + (uas * wUas)) / totalWeight);
+  };
+
+  const generateDeskripsi = (studentId) => {
+    const dataPH = grades[studentId].PH.map(v => v === '' ? null : Number(v));
+    if (dataPH.filter(v => v !== null).length === 0) return "-";
+
+    let maxVal = -1; let minVal = 101;
+    let maxIdx = -1; let minIdx = -1;
+
+    dataPH.forEach((val, idx) => {
+      if (val !== null) {
+        if (val > maxVal) { maxVal = val; maxIdx = idx; }
+        if (val < minVal) { minVal = val; minIdx = idx; }
+      }
+    });
+
+    const descMax = phDescriptions[maxIdx] || `materi ke-${maxIdx + 1}`;
+    const descMin = phDescriptions[minIdx] || `materi ke-${minIdx + 1}`;
+
+    let narasi = `Menunjukkan penguasaan yang sangat baik dalam materi ${descMax}.`;
+    if (minVal < kkm && minIdx !== maxIdx) {
+       narasi += ` Namun perlu bimbingan lebih lanjut pada materi ${descMin}.`;
+    }
+    return narasi;
+  };
+
+  const addPhColumn = () => {
+    setPhCount(prev => prev + 1);
+    setPhDescriptions(prev => [...prev, '']);
+    setGrades(prev => {
+      const newGrades = {...prev};
+      Object.keys(newGrades).forEach(key => newGrades[key].PH.push(''));
+      return newGrades;
+    });
+  };
+
+  const removePhColumn = () => {
+    if (phCount <= 1) return;
+    setPhCount(prev => prev - 1);
+    setPhDescriptions(prev => prev.slice(0, -1));
+    setGrades(prev => {
+      const newGrades = {...prev};
+      Object.keys(newGrades).forEach(key => newGrades[key].PH.pop());
+      return newGrades;
+    });
+  };
+
+  const handleSaveGrades = async () => {
+    const totalW = Number(weights.PH) + Number(weights.UTS) + Number(weights.UAS);
+    if (totalW !== 100) return alert("Total Bobot Persentase harus tepat 100%!");
+    
+    for (let i = 0; i < phCount; i++) {
+       if (!phDescriptions[i].trim()) return alert(`Harap isi Deskripsi Materi untuk PH ${i+1} di menu Bobot (%) !`);
+    }
+
+    setIsSaving(true);
+    try {
+      await setDoc(doc(db, "mapel_settings", `${selectedClass.classId}_${selectedClass.mapel}`), {
+        weights: weights, phCount: phCount, phDescriptions: phDescriptions
+      });
+
+      const updatePromises = students.map(async (student) => {
+        const studentRef = doc(db, "siswa", student.id);
+        const finalScore = hitungNilaiAkhir(student.id);
+        const deskripsiCapaian = generateDeskripsi(student.id);
+        
+        const payloadNilai = {
+          PH: grades[student.id].PH.map(v => v === '' ? '' : Number(v)),
+          UTS: grades[student.id].UTS === '' ? '' : Number(grades[student.id].UTS),
+          UAS: grades[student.id].UAS === '' ? '' : Number(grades[student.id].UAS),
+          NilaiAkhir: finalScore,
+          Deskripsi: deskripsiCapaian 
+        };
+
+        await updateDoc(studentRef, { [`nilaiMapel.${selectedClass.mapel}`]: payloadNilai });
+      });
+
+      await Promise.all(updatePromises);
+      alert(`Nilai dan Deskripsi Capaian ${selectedClass.mapel} berhasil disimpan!`);
+    } catch (error) { alert("Terjadi kesalahan."); console.error(error); }
+    setIsSaving(false);
+  };
+
+  if (loading && !selectedClass) return <div className="p-10 text-center text-gray-400 font-medium animate-pulse mt-10">Menyiapkan buku nilai...</div>;
 
   return (
-    <div className="p-4 md:p-6 space-y-6 max-w-5xl mx-auto">
+    <div className="p-4 md:p-6 max-w-[1400px] mx-auto flex flex-col xl:flex-row gap-6 animate-fade-in font-sans text-gray-800">
       
-      {/* HEADER & PILIH KELAS */}
-      <div className="bg-white p-6 rounded-2xl shadow-sm border border-teal-100">
-        <div className="flex items-center gap-3 mb-6 pb-4 border-b">
-          <div className="p-3 bg-teal-100 text-teal-700 rounded-xl">
-            <School size={24} />
-          </div>
-          <div>
-            <h1 className="text-xl font-bold text-gray-800">Jaringan Penilaian Terpadu</h1>
-            <p className="text-sm text-gray-500 font-medium">Terhubung dengan: <span className="text-teal-600 font-bold uppercase">{sekolahAktif || 'Belum Diatur'}</span></p>
-          </div>
-        </div>
-
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-          <div>
-            <label className="text-xs font-bold text-gray-500 ml-1 block mb-2 uppercase">Pilih Kelas Tujuan</label>
-            <select 
-              value={selectedWaliId}
-              onChange={(e) => handlePilihKelas(e.target.value)}
-              className="w-full p-3 border border-teal-200 rounded-xl focus:ring-2 focus:ring-teal-500 bg-teal-50 text-teal-900 font-bold cursor-pointer outline-none"
-            >
-              <option value="">-- Pilih Kelas yang Anda Ajar --</option>
-              {daftarKelas.map(kelas => (
-                <option key={kelas.idWali} value={kelas.idWali}>
-                  Kelas {kelas.namaKelas} (Wali: {kelas.namaWali})
-                </option>
-              ))}
-            </select>
-          </div>
-          
-          {students.length > 0 && (
-             <div>
-               <label className="text-xs font-bold text-gray-500 ml-1 block mb-2 uppercase">Nama Mata Pelajaran</label>
-               <input 
-                 type="text" 
-                 placeholder="Contoh: IPA Terpadu" 
-                 value={selectedMapel}
-                 onChange={(e) => setSelectedMapel(e.target.value)}
-                 className="w-full p-3 border border-gray-300 rounded-xl focus:ring-2 focus:ring-teal-500 outline-none"
-               />
-             </div>
+      {/* SIDEBAR: DAFTAR KELAS AMPUAN */}
+      <div className="w-full xl:w-72 shrink-0 space-y-4">
+        <div className="bg-white p-5 rounded-2xl border border-gray-200 sticky top-6">
+          <h2 className="text-sm font-bold text-gray-800 flex items-center gap-2 mb-4 border-b border-gray-100 pb-3">
+             <BookOpen className="text-gray-400" size={16} /> Daftar Kelas Ampuan
+          </h2>
+          {classesTaught.length === 0 ? (
+            <div className="text-center p-6 border border-dashed border-gray-200 rounded-xl text-gray-400 text-xs font-medium">Belum ada kelas yang ditugaskan.</div>
+          ) : (
+            <div className="space-y-1.5">
+              {classesTaught.map((cls, idx) => {
+                const isSelected = selectedClass?.classId === cls.classId && selectedClass?.mapel === cls.mapel;
+                return (
+                  <button 
+                    key={idx} 
+                    onClick={() => handleSelectClass(cls)} 
+                    className={`w-full flex justify-between items-center p-3.5 rounded-xl transition-all border group ${isSelected ? 'bg-gray-50 border-l-4 border-l-gray-800 border-t-gray-200 border-r-gray-200 border-b-gray-200' : 'bg-white border-transparent hover:bg-gray-50 hover:border-gray-200'}`}
+                  >
+                    <div className="text-left">
+                       <div className={`text-sm ${isSelected ? 'font-bold text-gray-900' : 'font-semibold text-gray-700'}`}>{cls.mapel}</div>
+                       <div className="text-[10px] text-gray-500 font-medium flex items-center gap-1 mt-1">
+                          <School size={10}/> Kelas {cls.className}
+                       </div>
+                    </div>
+                    <ChevronRight size={16} className={`${isSelected ? 'text-gray-800' : 'text-gray-300 group-hover:text-gray-400'}`} />
+                  </button>
+                )
+              })}
+            </div>
           )}
         </div>
       </div>
 
-      {/* AREA INPUT NILAI */}
-      {students.length > 0 && (
-        <div className="bg-white rounded-2xl shadow-lg border border-gray-100 overflow-hidden animate-fade-in">
-          <div className="p-4 bg-gray-800 text-white flex justify-between items-center">
-            <div className="flex items-center gap-2">
-              <Users size={18} className="text-teal-300" />
-              <span className="font-bold text-sm">Input Nilai Siswa</span>
-            </div>
-            <span className="text-xs font-bold bg-gray-700 px-3 py-1 rounded-full">{students.length} Siswa</span>
+      {/* AREA UTAMA: SPREADSHEET */}
+      <div className="flex-1 overflow-hidden">
+        {!selectedClass ? (
+          <div className="bg-white border border-dashed border-gray-300 rounded-2xl h-full flex flex-col items-center justify-center p-12 text-gray-400 min-h-[500px]">
+             <Calculator size={48} className="opacity-20 mb-4 text-gray-500" />
+             <p className="font-bold text-gray-500">Pilih Kelas Ampuan</p>
+             <p className="text-sm mt-1">Buku nilai akan ditampilkan di sini.</p>
           </div>
+        ) : (
+          <div className="bg-white rounded-2xl border border-gray-200 flex flex-col h-[85vh] animate-slide-up shadow-sm">
+            
+            {/* HEADER SPREADSHEET */}
+            <div className="p-5 md:p-6 border-b border-gray-100 flex flex-col md:flex-row justify-between items-start md:items-center gap-4 shrink-0 bg-white rounded-t-2xl z-10">
+              <div>
+                <h2 className="text-xl font-bold text-gray-800 flex items-center gap-2">{selectedClass.mapel}</h2>
+                <div className="flex flex-wrap gap-2 mt-2">
+                   <p className="text-[11px] text-gray-600 font-semibold flex items-center gap-1.5 bg-gray-50 border border-gray-200 px-2 py-1 rounded-md">
+                      <School size={12}/> Kelas {selectedClass.className}
+                   </p>
+                   <p className="text-[11px] text-gray-600 font-semibold flex items-center gap-1.5 bg-gray-50 border border-gray-200 px-2 py-1 rounded-md">
+                      Standar KKM: <span className="font-black text-gray-800">{kkm}</span>
+                   </p>
+                </div>
+              </div>
+              <div className="flex flex-col sm:flex-row gap-2 w-full md:w-auto">
+                <button 
+                  onClick={() => setShowSettings(!showSettings)} 
+                  className={`px-5 py-2.5 rounded-lg font-medium text-sm flex items-center justify-center gap-2 border transition-colors w-full sm:w-auto ${showSettings ? 'bg-gray-100 text-gray-800 border-gray-300' : 'bg-white text-gray-600 border-gray-200 hover:bg-gray-50'}`}
+                >
+                  <SlidersHorizontal size={16} /> Konfigurasi Penilaian
+                </button>
+                <button 
+                  onClick={handleSaveGrades} 
+                  disabled={isSaving || students.length===0} 
+                  className="bg-gray-800 text-white px-6 py-2.5 rounded-lg font-medium text-sm flex items-center justify-center gap-2 hover:bg-gray-900 transition-colors disabled:opacity-50 w-full sm:w-auto"
+                >
+                  {isSaving ? "Merekam..." : <><Save size={16} /> Simpan Lembar Nilai</>}
+                </button>
+              </div>
+            </div>
 
-          <div className="overflow-x-auto">
-            <table className="w-full text-left border-collapse">
-              <thead>
-                <tr className="bg-gray-50 text-gray-600 text-xs uppercase font-bold border-b">
-                  <th className="p-4">Nama Siswa</th>
-                  <th className="p-4 text-center">Tugas / UH</th>
-                  <th className="p-4 text-center">PTS</th>
-                  <th className="p-4 text-center">PAS</th>
-                </tr>
-              </thead>
-              <tbody>
-                {students.map((s, index) => (
-                  <tr key={s.id} className="border-b hover:bg-teal-50 transition-colors">
-                    <td className="p-4 font-semibold text-gray-700">
-                      <span className="text-gray-400 mr-3 text-xs">{index + 1}.</span>{s.name}
-                    </td>
-                    {['UH', 'PTS', 'PAS'].map(kat => (
-                      <td key={kat} className="p-2">
+            {/* PANEL KONFIGURASI (BOBOT & DESKRIPSI) */}
+            {showSettings && (
+              <div className="bg-gray-50 p-6 shrink-0 animate-slide-down border-b border-gray-200 flex flex-col gap-6 overflow-y-auto max-h-[40vh] md:max-h-[50vh]">
+                
+                {/* BOBOT */}
+                <div className="flex flex-col lg:flex-row gap-6 items-start lg:items-center justify-between border-b border-gray-200 pb-6">
+                  <div className="flex-1 w-full">
+                    <p className="text-[10px] text-gray-500 font-bold uppercase tracking-wider mb-3 ml-0.5">Persentase Bobot Nilai (%)</p>
+                    <div className="flex flex-wrap sm:flex-nowrap gap-3">
+                      <div className="flex-1 min-w-[100px]">
+                         <label className="text-[10px] font-bold text-gray-500 uppercase ml-0.5">Harian (PH)</label>
+                         <input type="number" value={weights.PH} onChange={e=>setWeights({...weights, PH: e.target.value})} className="w-full bg-white border border-gray-200 p-2.5 rounded-lg outline-none text-sm font-bold text-center mt-1.5 focus:border-gray-500 focus:ring-1 focus:ring-gray-500" />
+                      </div>
+                      <div className="flex-1 min-w-[100px]">
+                         <label className="text-[10px] font-bold text-gray-500 uppercase ml-0.5">Tengah Semester</label>
+                         <input type="number" value={weights.UTS} onChange={e=>setWeights({...weights, UTS: e.target.value})} className="w-full bg-white border border-gray-200 p-2.5 rounded-lg outline-none text-sm font-bold text-center mt-1.5 focus:border-gray-500 focus:ring-1 focus:ring-gray-500" />
+                      </div>
+                      <div className="flex-1 min-w-[100px]">
+                         <label className="text-[10px] font-bold text-gray-500 uppercase ml-0.5">Akhir Semester</label>
+                         <input type="number" value={weights.UAS} onChange={e=>setWeights({...weights, UAS: e.target.value})} className="w-full bg-white border border-gray-200 p-2.5 rounded-lg outline-none text-sm font-bold text-center mt-1.5 focus:border-gray-500 focus:ring-1 focus:ring-gray-500" />
+                      </div>
+                    </div>
+                  </div>
+                  <div className="w-full lg:w-48 bg-white border border-gray-200 p-4 rounded-xl text-center flex flex-col justify-center">
+                     <p className="text-[10px] text-gray-500 font-bold uppercase tracking-wider">Total Kalkulasi</p>
+                     <p className={`text-3xl font-black mt-1 ${(Number(weights.PH)+Number(weights.UTS)+Number(weights.UAS))===100?'text-gray-800':'text-red-500'}`}>{Number(weights.PH)+Number(weights.UTS)+Number(weights.UAS)}%</p>
+                  </div>
+                </div>
+
+                {/* DESKRIPSI PH */}
+                <div className="w-full">
+                  <p className="text-[10px] text-gray-800 font-bold uppercase tracking-wider mb-3 flex items-center gap-1.5 ml-0.5">
+                    <TextQuote size={14} className="text-gray-400"/> Topik / Materi Penilaian Harian
+                  </p>
+                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                    {Array.from({length: phCount}).map((_, i) => (
+                      <div key={i} className="bg-white p-4 rounded-xl border border-gray-200 shadow-sm">
+                        <label className="text-[10px] font-bold text-gray-500 uppercase tracking-wider">Kompetensi PH Ke-{i+1}</label>
                         <input 
-                          type="number"
-                          placeholder="0-100"
-                          className="w-20 mx-auto block p-2 border border-gray-200 rounded-lg text-center font-semibold text-gray-700 focus:border-teal-500 focus:ring-1 focus:ring-teal-500 outline-none transition-all"
-                          onChange={(e) => handleScoreChange(s.id, kat, e.target.value)}
+                          type="text" 
+                          placeholder="Cth: Teks Eksposisi" 
+                          value={phDescriptions[i]}
+                          onChange={(e) => {
+                            const newDesc = [...phDescriptions];
+                            newDesc[i] = e.target.value;
+                            setPhDescriptions(newDesc);
+                          }}
+                          className="w-full mt-2 bg-gray-50 border border-gray-200 rounded-lg p-2.5 text-sm outline-none focus:border-gray-400 focus:ring-1 focus:ring-gray-400 text-gray-800 font-medium placeholder-gray-400 transition-all"
                         />
-                      </td>
+                      </div>
                     ))}
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+                  </div>
+                  <div className="mt-4 flex items-start gap-2 bg-blue-50/50 p-3 rounded-xl border border-blue-100">
+                     <AlertCircle size={14} className="text-blue-500 shrink-0 mt-0.5" />
+                     <p className="text-[10px] text-blue-700 font-medium leading-relaxed">Kalimat deskripsi capaian di Rapor Siswa akan dirakit secara otomatis oleh mesin menggunakan topik materi dengan nilai tertinggi (Kekuatan) dan nilai terendah (Kelemahan) dari data di atas.</p>
+                  </div>
+                </div>
+              </div>
+            )}
 
-          <div className="p-6 bg-gray-50 flex flex-col md:flex-row justify-between items-center gap-4 border-t border-gray-200">
-            <div className="text-xs text-gray-500 flex items-center gap-2">
-              <CheckCircle size={16} className="text-teal-600" />
-              Nilai akan masuk ke ruang verifikasi Wali Kelas.
+            {/* TABEL SPREADSHEET */}
+            <div className="flex-1 overflow-auto bg-gray-50/30 relative">
+              {loading ? (
+                <div className="flex items-center justify-center h-full text-gray-400 font-medium animate-pulse">Memuat spreadsheet...</div>
+              ) : students.length === 0 ? (
+                <div className="flex items-center justify-center h-full text-gray-400 text-sm italic">Buku induk kosong. Siswa belum terdaftar di kelas ini.</div>
+              ) : (
+                <div className="min-w-[900px]">
+                  <table className="w-full text-left border-collapse">
+                    <thead className="sticky top-0 z-10 bg-gray-50 shadow-sm">
+                      <tr className="text-gray-500 text-[10px] font-bold uppercase tracking-wider border-b border-gray-200">
+                        <th className="p-3 w-12 text-center border-r border-gray-200">No</th>
+                        <th className="p-3 min-w-[200px] border-r border-gray-200">Identitas Siswa</th>
+                        <th className="p-0 border-r border-gray-200 bg-white" colSpan={phCount}>
+                          <div className="flex justify-between items-center px-3 py-2 border-b border-gray-200 bg-gray-50">
+                             <span>Penilaian Harian (PH)</span>
+                             <div className="flex gap-1.5">
+                               <button onClick={removePhColumn} className="p-1 text-gray-400 hover:bg-gray-200 hover:text-red-500 rounded transition-colors" title="Hapus Kolom"><Trash2 size={12}/></button>
+                               <button onClick={addPhColumn} className="px-1.5 py-1 bg-white border border-gray-200 rounded text-gray-600 hover:bg-gray-100 transition-colors flex items-center gap-1" title="Tambah Kolom"><Plus size={12}/></button>
+                             </div>
+                          </div>
+                          <div className="flex bg-white">
+                            {Array.from({length: phCount}).map((_, i) => (
+                               <div key={i} className={`flex-1 p-2 text-center text-gray-600 ${i!==phCount-1?'border-r border-gray-200':''}`}>Ke-{i+1}</div>
+                            ))}
+                          </div>
+                        </th>
+                        <th className="p-3 w-20 text-center border-r border-gray-200">Tengah<br/>Smt</th>
+                        <th className="p-3 w-20 text-center border-r border-gray-200">Akhir<br/>Smt</th>
+                        <th className="p-3 w-24 text-center border-r border-gray-200 bg-gray-100 text-gray-700">Kalkulasi<br/>Akhir</th>
+                        <th className="p-3 w-28 text-center">Status<br/>Capaian</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {students.map((student, index) => {
+                        const nilaiAkhir = hitungNilaiAkhir(student.id);
+                        const isTuntas = nilaiAkhir >= kkm;
+                        return (
+                          <tr key={student.id} className="border-b border-gray-100 hover:bg-white transition-colors">
+                            <td className="p-3 text-center text-gray-400 text-xs border-r border-gray-100 font-medium">{index + 1}</td>
+                            <td className="p-3 border-r border-gray-100 bg-white sticky left-0 z-0">
+                               <div className="font-semibold text-gray-800 text-sm whitespace-nowrap overflow-hidden text-ellipsis max-w-[200px]" title={student.name}>{student.name}</div>
+                            </td>
+                            
+                            {/* INPUT PH */}
+                            {Array.from({length: phCount}).map((_, i) => (
+                              <td key={i} className="p-1.5 border-r border-gray-100 align-middle">
+                                 <input 
+                                   type="number" min="0" max="100" placeholder="-" 
+                                   value={grades[student.id].PH[i] !== undefined ? grades[student.id].PH[i] : ''} 
+                                   onChange={(e) => handleGradeChange(student.id, 'PH', e.target.value, i)} 
+                                   className="w-full text-center p-2 rounded-lg border border-transparent hover:border-gray-200 focus:border-gray-400 focus:ring-1 focus:ring-gray-400 focus:bg-white bg-transparent outline-none text-sm font-semibold text-gray-700 transition-all placeholder-gray-300"
+                                 />
+                              </td>
+                            ))}
+                            
+                            {/* INPUT UTS & UAS */}
+                            <td className="p-1.5 border-r border-gray-100 align-middle">
+                               <input 
+                                 type="number" min="0" max="100" placeholder="-" 
+                                 value={grades[student.id].UTS} 
+                                 onChange={(e) => handleGradeChange(student.id, 'UTS', e.target.value)} 
+                                 className="w-full text-center p-2 rounded-lg border border-transparent hover:border-gray-200 focus:border-gray-400 focus:ring-1 focus:ring-gray-400 focus:bg-white bg-transparent outline-none text-sm font-semibold text-gray-700 transition-all placeholder-gray-300"
+                               />
+                            </td>
+                            <td className="p-1.5 border-r border-gray-100 align-middle">
+                               <input 
+                                 type="number" min="0" max="100" placeholder="-" 
+                                 value={grades[student.id].UAS} 
+                                 onChange={(e) => handleGradeChange(student.id, 'UAS', e.target.value)} 
+                                 className="w-full text-center p-2 rounded-lg border border-transparent hover:border-gray-200 focus:border-gray-400 focus:ring-1 focus:ring-gray-400 focus:bg-white bg-transparent outline-none text-sm font-semibold text-gray-700 transition-all placeholder-gray-300"
+                               />
+                            </td>
+                            
+                            {/* HASIL AKHIR & STATUS */}
+                            <td className="p-3 border-r border-gray-100 text-center align-middle bg-gray-50/50">
+                               <span className={`text-lg font-black ${nilaiAkhir > 0 ? 'text-gray-800' : 'text-gray-300'}`}>{nilaiAkhir || '-'}</span>
+                            </td>
+                            <td className="p-3 text-center align-middle">
+                               {nilaiAkhir === 0 ? (
+                                  <span className="text-[10px] text-gray-400">-</span>
+                               ) : (
+                                  <span className={`text-[9px] font-bold uppercase px-2.5 py-1.5 rounded-md border tracking-wider ${isTuntas ? 'bg-green-50 text-green-700 border-green-200' : 'bg-red-50 text-red-700 border-red-200'}`}>
+                                    {isTuntas ? 'Tuntas' : 'Remedial'}
+                                  </span>
+                               )}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              )}
             </div>
-            <button 
-              onClick={handleSubmitToWaliKelas}
-              disabled={isSending}
-              className="w-full md:w-auto bg-teal-600 text-white px-8 py-3 rounded-xl font-bold flex items-center justify-center gap-2 shadow-lg hover:bg-teal-700 transition-all disabled:opacity-70 disabled:cursor-not-allowed"
-            >
-              <Send size={18} /> {isSending ? "Mengirim Data..." : "Kirim Laporan Nilai"}
-            </button>
           </div>
-        </div>
-      )}
+        )}
+      </div>
     </div>
   );
 };

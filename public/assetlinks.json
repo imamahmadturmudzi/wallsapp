@@ -1,0 +1,8 @@
+[{
+      "relation": ["delegate_permission/common.handle_all_urls"],
+      "target": {
+        "namespace": "android_app",
+        "package_name": "app.vercel.walasapp_ecru.twa",
+        "sha256_cert_fingerprints": ["F9:FB:8D:AA:78:FA:91:41:E1:8C:BE:2B:BF:E6:FE:48:49:75:79:A8:D1:49:51:5A:5A:40:F4:12:FF:D5:95:B2"]
+      }
+    }]
